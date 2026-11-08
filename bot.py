@@ -3,9 +3,16 @@ import os
 import json
 from pathlib import Path
 
-from aiogram import Bot, Dispatcher
+from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command, CommandStart, CommandObject
-from aiogram.types import Message
+from aiogram.types import (
+    CallbackQuery,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    KeyboardButton,
+    Message,
+    ReplyKeyboardMarkup,
+)
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -27,6 +34,14 @@ def save_tasks() -> None:
         json.dump(tasks, file, ensure_ascii=False, indent=2)
 
 dp = Dispatcher()
+
+main_keyboard = ReplyKeyboardMarkup(
+    keyboard = [
+        [KeyboardButton(text="📋 List"), KeyboardButton(text="🧹 Clear")],
+    ],
+    resize_keyboard = True,
+)
+
 tasks: dict[int, list[dict]] = load_tasks()
 
 def get_task_index(args: str | None, total: int) -> int | None:
@@ -37,6 +52,24 @@ def get_task_index(args: str | None, total: int) -> int | None:
         return number - 1
     return None
 
+def build_list_view(user_id: int) -> tuple[str, InlineKeyboardMarkup | None]:
+    user_tasks = tasks.get(user_id, [])
+    if not user_tasks:
+        return "You have no tasks yet. Add one with /add", None
+
+    lines = []
+    rows = []
+    for number, task in enumerate(user_tasks, start=1):
+        mark = "✅" if task["done"] else "⬜"
+        lines.append(f"{number}. {mark} {task['text']}")
+        rows.append([
+            InlineKeyboardButton(text=f"✅ {number}", callback_data=f"done:{number - 1}"),
+            InlineKeyboardButton(text=f"🗑 {number}", callback_data=f"delete:{number - 1}"),
+        ])
+
+    text = "Your tasks:\n" + "\n".join(lines)
+    return text, InlineKeyboardMarkup(inline_keyboard=rows)
+
 @dp.message(CommandStart())
 async def start_handler(message: Message):
     name = message.from_user.first_name if message.from_user else "friend"
@@ -46,7 +79,8 @@ async def start_handler(message: Message):
         "/list - show all tasks\n"
         "/done <number> - mark task as done\n"
         "/delete <number> - delete task\n"
-        "/clear <number> - remove done tasks"
+        "/clear - remove done tasks",
+        reply_markup=main_keyboard,
     )
 
 @dp.message(Command("add"))
@@ -63,22 +97,14 @@ async def add_handler(message: Message, command: CommandObject):
     save_tasks()
     await message.answer(f"Task added: {text}")
 
+@dp.message(F.text == "📋 List")
 @dp.message(Command("list"))
 async def list_handler(message: Message):
     if message.from_user is None:
         return
 
-    user_tasks = tasks.get(message.from_user.id, [])
-    if not user_tasks:
-        await message.answer("You have no tasks yet. Add one with /add")
-        return
-
-    lines = []
-    for number, task in enumerate(user_tasks, start=1):
-        mark = "✅" if task["done"] else "⬜"
-        lines.append(f"{number}. {mark} {task['text']}")
-
-    await message.answer("Your tasks:\n" + "\n".join(lines))
+    text, keyboard = build_list_view(message.from_user.id)
+    await message.answer(text, reply_markup=keyboard)
 
 @dp.message(Command("done"))
 async def done_handler(message: Message, command: CommandObject):
@@ -111,6 +137,7 @@ async def delete_handler(message: Message, command: CommandObject):
     await message.answer(f"Deleted 🗑: {removed['text']}")
     save_tasks()
 
+@dp.message(F.text == "🧹 Clear")
 @dp.message(Command("clear"))
 async def clear_handler(message: Message):
     if message.from_user is None:
@@ -129,6 +156,39 @@ async def clear_handler(message: Message):
     removed = before - len(new_tasks)
     await message.answer(f"Removed {removed} done tasks")
     save_tasks()
+
+@dp.callback_query(F.data.startswith("done:"))
+async def done_callback_handler(callback: CallbackQuery):
+    if callback.data is None or not isinstance(callback.message, Message):
+        return
+
+    index = int(callback.data.split(":")[1])
+    user_tasks = tasks.get(callback.from_user.id, [])
+
+    if 0 <= index < len(user_tasks) and not user_tasks[index]["done"]:
+        user_tasks[index]["done"] = True
+        save_tasks()
+        text, keyboard = build_list_view(callback.from_user.id)
+        await callback.message.edit_text(text, reply_markup=keyboard)
+
+    await callback.answer()
+
+@dp.callback_query(F.data.startswith("delete:"))
+async def delete_callback_handler(callback: CallbackQuery):
+    if callback.data is None or not isinstance(callback.message, Message):
+        return
+
+    index = int(callback.data.split(":")[1])
+    user_tasks = tasks.get(callback.from_user.id, [])
+
+    if 0 <= index < len(user_tasks):
+        user_tasks.pop(index)
+        save_tasks()
+        text, keyboard = build_list_view(callback.from_user.id)
+        await callback.message.edit_text(text, reply_markup=keyboard)
+
+    await callback.answer()
+
 
 async def main():
     bot = Bot(token=TOKEN)
