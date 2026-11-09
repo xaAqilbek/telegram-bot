@@ -3,6 +3,9 @@ import os
 import json
 from pathlib import Path
 
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
+
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command, CommandStart, CommandObject
 from aiogram.types import (
@@ -35,9 +38,19 @@ def save_tasks() -> None:
 
 dp = Dispatcher()
 
+class AddTask(StatesGroup):
+    waiting_for_text = State()
+
+cancel_keyboard = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="❌ Cancel")]],
+        resize_keyboard=True,
+)
 main_keyboard = ReplyKeyboardMarkup(
     keyboard = [
-        [KeyboardButton(text="📋 List"), KeyboardButton(text="🧹 Clear")],
+        [KeyboardButton(text="➕ Add")],
+        [KeyboardButton(text="📋 List")],
+         [KeyboardButton(text="🧹 Clear")],
     ],
     resize_keyboard = True,
 )
@@ -99,9 +112,13 @@ async def add_handler(message: Message, command: CommandObject):
 
 @dp.message(F.text == "📋 List")
 @dp.message(Command("list"))
-async def list_handler(message: Message):
+async def list_handler(message: Message, state: FSMContext):
     if message.from_user is None:
         return
+
+    if await state.get_state() is not None:
+        await state.clear()
+        await message.answer("Adding cancelled.", reply_markup=main_keyboard)
 
     text, keyboard = build_list_view(message.from_user.id)
     await message.answer(text, reply_markup=keyboard)
@@ -139,9 +156,10 @@ async def delete_handler(message: Message, command: CommandObject):
 
 @dp.message(F.text == "🧹 Clear")
 @dp.message(Command("clear"))
-async def clear_handler(message: Message):
+async def clear_handler(message: Messageб, state:FSMContext):
     if message.from_user is None:
         return
+    await state.clear()
     user_tasks = tasks.get(message.from_user.id, [])
     user_id = message.from_user.id
 
@@ -154,7 +172,7 @@ async def clear_handler(message: Message):
 
     tasks[user_id] = new_tasks
     removed = before - len(new_tasks)
-    await message.answer(f"Removed {removed} done tasks")
+    await message.answer(f"Removed {removed} done tasks", reply_markup=main_keyboard)
     save_tasks()
 
 @dp.callback_query(F.data.startswith("done:"))
@@ -189,6 +207,35 @@ async def delete_callback_handler(callback: CallbackQuery):
 
     await callback.answer()
 
+@dp.message(F.text == "➕ Add")
+async def add_button_handler(message: Message, state: FSMContext):
+    await state.set_state(AddTask.waiting_for_text)
+    await message.answer(
+        "What do you want to add? Write the task text.",
+            reply_markup=cancel_keyboard,
+                         )
+
+@dp.message(Command("cancel"))
+@dp.message(F.text == "❌ Cancel")
+async def cancel_handler(message: Message, state: FSMContext):
+    current = await state.get_state()
+    if current is None:
+        await message.answer("Nothing to cancel.")
+        return
+    await state.clear()
+    await message.answer("Cancelled.", reply_markup=main_keyboard)
+
+@dp.message(AddTask.waiting_for_text, F.text)
+async def add_text_handler(message: Message, state: FSMContext):
+    if message.from_user is None or message.text is None:
+        return
+
+    text = message.text
+    tasks.setdefault(message.from_user.id, []).append({"text": text, "done": False})
+    save_tasks()
+
+    await state.clear()
+    await message.answer(f"Task added: {text}", reply_markup=main_keyboard)
 
 async def main():
     bot = Bot(token=TOKEN)
