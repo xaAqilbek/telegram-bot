@@ -156,7 +156,7 @@ async def delete_handler(message: Message, command: CommandObject):
 
 @dp.message(F.text == "🧹 Clear")
 @dp.message(Command("clear"))
-async def clear_handler(message: Messageб, state:FSMContext):
+async def clear_handler(message: Message, state:FSMContext):
     if message.from_user is None:
         return
     await state.clear()
@@ -207,13 +207,14 @@ async def delete_callback_handler(callback: CallbackQuery):
 
     await callback.answer()
 
+
 @dp.message(F.text == "➕ Add")
 async def add_button_handler(message: Message, state: FSMContext):
     await state.set_state(AddTask.waiting_for_text)
     await message.answer(
         "What do you want to add? Write the task text.",
-            reply_markup=cancel_keyboard,
-                         )
+        reply_markup=cancel_keyboard,
+    )
 
 @dp.message(Command("cancel"))
 @dp.message(F.text == "❌ Cancel")
