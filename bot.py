@@ -83,6 +83,12 @@ def build_list_view(user_id: int) -> tuple[str, InlineKeyboardMarkup | None]:
     text = "Your tasks:\n" + "\n".join(lines)
     return text, InlineKeyboardMarkup(inline_keyboard=rows)
 
+async def leave_adding_mode(message: Message, state:FSMContext) -> None:
+    if await state.get_state() is not None:
+        await state.clear()
+        await message.answer("Adding cancelled", reply_markup=main_keyboard)
+
+
 @dp.message(CommandStart())
 async def start_handler(message: Message):
     name = message.from_user.first_name if message.from_user else "friend"
@@ -92,18 +98,21 @@ async def start_handler(message: Message):
         "/list - show all tasks\n"
         "/done <number> - mark task as done\n"
         "/delete <number> - delete task\n"
-        "/clear - remove done tasks",
+        "/clear - remove done tasks\n"
+        "/cancel - cancel adding a task",
         reply_markup=main_keyboard,
     )
 
 @dp.message(Command("add"))
-async def add_handler(message: Message, command: CommandObject):
+async def add_handler(message: Message, command: CommandObject, state: FSMContext):
     if message.from_user is None:
         return
 
+    await leave_adding_mode(message, state)
+
     text = command.args
     if not text:
-        await message.answer("Write the task after the command. \nExample: /add buy bread")
+        await message.answer("Write the task after the command.\nExample: /add buy bread")
         return
 
     tasks.setdefault(message.from_user.id, []).append({"text": text, "done": False})
@@ -116,17 +125,17 @@ async def list_handler(message: Message, state: FSMContext):
     if message.from_user is None:
         return
 
-    if await state.get_state() is not None:
-        await state.clear()
-        await message.answer("Adding cancelled.", reply_markup=main_keyboard)
+    await leave_adding_mode(message, state)
 
     text, keyboard = build_list_view(message.from_user.id)
     await message.answer(text, reply_markup=keyboard)
 
 @dp.message(Command("done"))
-async def done_handler(message: Message, command: CommandObject):
+async def done_handler(message: Message, command: CommandObject, state: FSMContext):
     if message.from_user is None:
         return
+
+    await leave_adding_mode(message, state)
 
     user_tasks = tasks.get(message.from_user.id, [])
     index = get_task_index(command.args, len(user_tasks))
@@ -135,14 +144,16 @@ async def done_handler(message: Message, command: CommandObject):
         return
 
     user_tasks[index]["done"] = True
-    await message.answer(f"Done ✅: {user_tasks[index]['text']}")
     save_tasks()
+    await message.answer(f"Done ✅: {user_tasks[index]['text']}")
 
 
 @dp.message(Command("delete"))
-async def delete_handler(message: Message, command: CommandObject):
+async def delete_handler(message: Message, command: CommandObject, state: FSMContext):
     if message.from_user is None:
         return
+
+    await leave_adding_mode(message, state)
 
     user_tasks = tasks.get(message.from_user.id, [])
     index = get_task_index(command.args, len(user_tasks))
@@ -151,18 +162,19 @@ async def delete_handler(message: Message, command: CommandObject):
         return
 
     removed = user_tasks.pop(index)
-    await message.answer(f"Deleted 🗑: {removed['text']}")
     save_tasks()
+    await message.answer(f"Deleted 🗑: {removed['text']}")
 
 @dp.message(F.text == "🧹 Clear")
 @dp.message(Command("clear"))
-async def clear_handler(message: Message, state:FSMContext):
+async def clear_handler(message: Message, state: FSMContext):
     if message.from_user is None:
         return
-    await state.clear()
-    user_tasks = tasks.get(message.from_user.id, [])
-    user_id = message.from_user.id
 
+    await leave_adding_mode(message, state)
+
+    user_id = message.from_user.id
+    user_tasks = tasks.get(user_id, [])
     before = len(user_tasks)
 
     new_tasks = []
@@ -171,9 +183,10 @@ async def clear_handler(message: Message, state:FSMContext):
             new_tasks.append(task)
 
     tasks[user_id] = new_tasks
-    removed = before - len(new_tasks)
-    await message.answer(f"Removed {removed} done tasks", reply_markup=main_keyboard)
     save_tasks()
+
+    removed = before - len(new_tasks)
+    await message.answer(f"Removed {removed} done tasks")
 
 @dp.callback_query(F.data.startswith("done:"))
 async def done_callback_handler(callback: CallbackQuery):
